@@ -38,6 +38,12 @@
             display: inline-block;
             margin-right: 5px;
         }
+        .line-clamp-2 {
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
     </style>
 </head>
 <body class="bg-gray-50 min-h-screen">
@@ -53,6 +59,7 @@
                         id="usernameInput" 
                         placeholder="Enter GitHub username" 
                         class="w-full py-4 px-6 rounded-l-lg text-gray-800 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        value="octocat"
                     >
                     <button 
                         id="searchBtn" 
@@ -133,6 +140,14 @@
                 <p class="text-gray-500">Enter a GitHub username above to explore their profile and repositories</p>
             </div>
         </div>
+
+        <div id="loadingState" class="hidden text-center py-16">
+            <div class="max-w-md mx-auto">
+                <i class="fas fa-spinner fa-spin text-6xl text-purple-500 mb-4"></i>
+                <h3 class="text-2xl font-bold text-gray-700 mb-2">Searching GitHub...</h3>
+                <p class="text-gray-500">Fetching user data and repositories</p>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -143,6 +158,7 @@
         const errorText = document.getElementById('errorText');
         const profileSection = document.getElementById('profileSection');
         const emptyState = document.getElementById('emptyState');
+        const loadingState = document.getElementById('loadingState');
         const avatar = document.getElementById('avatar');
         const name = document.getElementById('name');
         const login = document.getElementById('login');
@@ -188,13 +204,26 @@
             MATLAB: '#e16737'
         };
 
+        // GitHub API with proxy to avoid CORS issues
+        const GITHUB_API_BASE = 'https://api.github.com';
+
+        // Create a simple proxy using cors-anywhere
+        // Note: In production, you should use your own proxy server
+        const PROXY_URL = 'https://github.com/musmana/GitHub-Profile-Explorer';
+
         // Get user data from GitHub API
         function getUser(username) {
             return new Promise((resolve, reject) => {
-                fetch(`https://api.github.com/users/${username}`)
+                fetch(`${PROXY_URL}${GITHUB_API_BASE}/users/${username}`)
                     .then(response => {
                         if (!response.ok) {
-                            throw new Error('User not found');
+                            if (response.status === 404) {
+                                throw new Error('User not found');
+                            } else if (response.status === 403) {
+                                throw new Error('API rate limit exceeded. Please try again later.');
+                            } else {
+                                throw new Error('Failed to fetch user data');
+                            }
                         }
                         return response.json();
                     })
@@ -205,7 +234,7 @@
 
         // Get user repositories
         function getUserRepos(username) {
-            return fetch(`https://api.github.com/users/${username}/repos?sort=updated&per_page=10`)
+            return fetch(`${PROXY_URL}${GITHUB_API_BASE}/users/${username}/repos?sort=updated&per_page=10`)
                 .then(response => {
                     if (!response.ok) {
                         throw new Error('Failed to fetch repositories');
@@ -216,7 +245,7 @@
 
         // Get user followers
         function getUserFollowers(username) {
-            return fetch(`https://api.github.com/users/${username}/followers?per_page=10`)
+            return fetch(`${PROXY_URL}${GITHUB_API_BASE}/users/${username}/followers?per_page=10`)
                 .then(response => {
                     if (!response.ok) {
                         throw new Error('Failed to fetch followers');
@@ -225,9 +254,34 @@
                 });
         }
 
+        // Alternative method without proxy (may work in some browsers)
+        function getUserDirect(username) {
+            return new Promise((resolve, reject) => {
+                fetch(`https://api.github.com/users/${username}`)
+                    .then(response => {
+                        if (!response.ok) {
+                            if (response.status === 404) {
+                                throw new Error('User not found');
+                            } else if (response.status === 403) {
+                                throw new Error('API rate limit exceeded. Please try again later.');
+                            } else {
+                                throw new Error('Failed to fetch user data');
+                            }
+                        }
+                        return response.json();
+                    })
+                    .then(data => resolve(data))
+                    .catch(error => {
+                        // If direct fetch fails, try with proxy
+                        console.log('Direct fetch failed, trying proxy...');
+                        getUser(username).then(resolve).catch(reject);
+                    });
+            });
+        }
+
         // Format numbers with commas
         function formatNumber(num) {
-            return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+            return num ? num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",") : '0';
         }
 
         // Format date
@@ -256,7 +310,7 @@
 
         // Display repositories
         function displayRepositories(repos) {
-            if (repos.length === 0) {
+            if (!repos || repos.length === 0) {
                 reposList.innerHTML = '<p class="text-gray-500 text-center py-4">No repositories found</p>';
                 return;
             }
@@ -290,7 +344,7 @@
 
         // Display followers
         function displayFollowers(followers) {
-            if (followers.length === 0) {
+            if (!followers || followers.length === 0) {
                 followersList.innerHTML = '<p class="text-gray-500 text-center py-4">No followers found</p>';
                 return;
             }
@@ -311,12 +365,26 @@
             errorText.textContent = message;
             errorMessage.classList.remove('hidden');
             profileSection.classList.add('hidden');
-            emptyState.classList.remove('hidden');
+            emptyState.classList.add('hidden');
+            loadingState.classList.add('hidden');
         }
 
         // Hide error message
         function hideError() {
             errorMessage.classList.add('hidden');
+        }
+
+        // Show loading state
+        function showLoading() {
+            loadingState.classList.remove('hidden');
+            profileSection.classList.add('hidden');
+            emptyState.classList.add('hidden');
+            errorMessage.classList.add('hidden');
+        }
+
+        // Hide loading state
+        function hideLoading() {
+            loadingState.classList.add('hidden');
         }
 
         // Save to localStorage
@@ -326,6 +394,7 @@
                 timestamp: Date.now()
             };
             localStorage.setItem(`github_user_${username}`, JSON.stringify(cache));
+            localStorage.setItem('last_searched_user', username);
         }
 
         // Get from localStorage
@@ -349,6 +418,7 @@
             }
             
             hideError();
+            showLoading();
             searchBtn.disabled = true;
             searchBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Searching...';
             
@@ -364,14 +434,15 @@
                     
                     profileSection.classList.remove('hidden');
                     emptyState.classList.add('hidden');
+                    hideLoading();
                 } else {
-                    // Fetch fresh data
-                    const userData = await getUser(username);
+                    // Fetch fresh data using direct method first, then proxy as fallback
+                    const userData = await getUserDirect(username);
                     
                     // Fetch repos and followers in parallel
                     const [repos, followers] = await Promise.all([
-                        getUserRepos(username),
-                        getUserFollowers(username)
+                        getUserRepos(username).catch(() => []),
+                        getUserFollowers(username).catch(() => [])
                     ]);
                     
                     // Save to cache
@@ -388,9 +459,12 @@
                     
                     profileSection.classList.remove('hidden');
                     emptyState.classList.add('hidden');
+                    hideLoading();
                 }
             } catch (error) {
+                console.error('Search error:', error);
                 showError(error.message);
+                hideLoading();
             } finally {
                 searchBtn.disabled = false;
                 searchBtn.innerHTML = '<i class="fas fa-search mr-2"></i> Search';
@@ -411,7 +485,11 @@
             const lastSearched = localStorage.getItem('last_searched_user');
             if (lastSearched) {
                 usernameInput.value = lastSearched;
-                searchUser();
+                // Auto-search only if we have cached data
+                const cachedData = getFromLocalStorage(lastSearched);
+                if (cachedData) {
+                    searchUser();
+                }
             }
         });
     </script>
